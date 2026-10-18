@@ -18,8 +18,12 @@ create table if not exists public.dt_bai (
     noi_dung      text,                           -- nội dung bài, các đoạn cách nhau bằng dòng trống
     anh           text,                           -- ảnh đại diện (og:image)
     trang_thai    text not null default 'cho',    -- cho / ok / loi
-    so_lan_thu    int  not null default 0
+    so_lan_thu    int  not null default 0,
+    ngoai_tinh    boolean not null default false  -- tin của xã trùng tên ở tỉnh khác -> ẩn khỏi Địa phương/MXH
 );
+
+-- Dùng khi bảng đã tạo từ bản trước (chạy lại không sao):
+alter table public.dt_bai add column if not exists ngoai_tinh boolean not null default false;
 
 create index if not exists dt_bai_muc_idx       on public.dt_bai using gin (muc);
 create index if not exists dt_bai_thoi_gian_idx on public.dt_bai (thoi_gian desc);
@@ -34,3 +38,16 @@ create policy "dt_bai_doc_cong_khai" on public.dt_bai
 
 -- Không tạo policy insert/update/delete cho anon => trình duyệt không sửa được dữ liệu.
 -- Script GitHub Actions dùng service_role key nên vượt qua RLS.
+
+-- ---------------------------------------------------------------------
+-- Bảng đếm lượt truy cập (giống app Streamlit cũ). Trang chỉ được THÊM, không được đọc/sửa.
+-- ---------------------------------------------------------------------
+create table if not exists public.thong_ke_truy_cap (
+    id         bigint generated always as identity primary key,
+    ten_app    text,
+    thoi_gian  timestamptz not null default now()
+);
+alter table public.thong_ke_truy_cap enable row level security;
+drop policy if exists "tktc_them" on public.thong_ke_truy_cap;
+create policy "tktc_them" on public.thong_ke_truy_cap
+    for insert to anon, authenticated with check (true);
