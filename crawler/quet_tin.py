@@ -10,7 +10,7 @@ Mỗi lần chạy:
   4. Xóa tin cũ hơn 30 ngày cho nhẹ cơ sở dữ liệu.
 
 Biến môi trường cần có (đặt trong GitHub > Settings > Secrets and variables > Actions):
-  SUPABASE_URL          vd: https://qqzsdxhqrdfvxnlurnyb.supabase.co
+  SUPABASE_URL          vd: https://elkysoeukqtweytkekwr.supabase.co
   SUPABASE_SERVICE_KEY  khóa service_role (KHÔNG phải anon key, KHÔNG đưa vào index.html)
 """
 
@@ -276,7 +276,9 @@ def quet_tat_ca():
 # SUPABASE (REST)
 # =====================================================================
 def sb_headers(extra=None):
-    h = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
+    h = {"apikey": SUPABASE_KEY, "Content-Type": "application/json"}
+    if SUPABASE_KEY.startswith("eyJ"):  # khóa kiểu cũ (JWT); khóa mới sb_secret_... chỉ cần apikey
+        h["Authorization"] = f"Bearer {SUPABASE_KEY}"
     if extra:
         h.update(extra)
     return h
