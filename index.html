@@ -275,7 +275,8 @@ function thongBao(chu) {
 async function taiMuc(m) {
   const tu = new Date(Date.now() - m.ngay * 86400000).toISOString();
   const cot = "khoa,tieu_de,nguon,cam_xuc,thoi_gian";
-  duLieu[m.ma] = await api(`dt_bai?select=${cot}&muc=cs.%7B${m.ma}%7D&thoi_gian=gte.${encodeURIComponent(tu)}&order=thoi_gian.desc&limit=${m.gioiHan}`);
+  const locTinh = (m.ma === "diaphuong" || m.ma === "mxh") ? "&ngoai_tinh=is.false" : "";
+  duLieu[m.ma] = await api(`dt_bai?select=${cot}&muc=cs.%7B${m.ma}%7D${locTinh}&thoi_gian=gte.${encodeURIComponent(tu)}&order=thoi_gian.desc&limit=${m.gioiHan}`);
 }
 
 async function taiTatCa() {
