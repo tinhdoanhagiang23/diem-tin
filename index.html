@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
 <title>Điểm tin & Lắng nghe dư luận · Ban Tuyên giáo Tỉnh ủy Tuyên Quang</title>
-<link rel="icon" href="logo.png">
+<link rel="icon" href="Logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800;900&family=Noto+Serif:wght@400;700&display=swap" rel="stylesheet">
@@ -154,7 +154,7 @@ button{font-family:inherit;cursor:pointer}
 <body>
 
 <header class="header">
-  <img class="logo" id="logo" src="logo.png" alt="" onerror="this.style.display='none';document.getElementById('logoDuPhong').style.display='flex'">
+  <img class="logo" id="logo" src="Logo.png" alt="" onerror="if(!this.dataset.thu){this.dataset.thu=1;this.src='logo.png'}else{this.style.display='none';document.getElementById('logoDuPhong').style.display='flex'}">
   <div class="logo-du-phong" id="logoDuPhong">
     <svg width="22" height="22" viewBox="0 0 24 24" fill="#F5A623"><path d="M12 2l2.9 6.9L22 9.3l-5.4 4.8L18.2 22 12 18.3 5.8 22l1.6-7.9L2 9.3l7.1-.4z"/></svg>
   </div>
@@ -185,7 +185,7 @@ button{font-family:inherit;cursor:pointer}
     </div>
     <div id="noiDungDoc">
       <div class="chua-chon">
-        <img src="logo.png" alt="" onerror="this.style.display='none'">
+        <img src="Logo.png" alt="" onerror="if(!this.dataset.thu){this.dataset.thu=1;this.src='logo.png'}else{this.style.display='none'}">
         <h2>Chọn một tin để đọc</h2>
         <p>Bấm vào tin bất kỳ ở danh sách bên trái, nội dung bài sẽ hiện ngay tại đây.</p>
       </div>
@@ -217,6 +217,7 @@ const duLieu = {};           // ma muc -> danh sách tin
 const boNhoBai = new Map();  // khoa -> bài đầy đủ
 let mucChon = MUC.some(m => m.ma === location.hash.slice(1)) ? location.hash.slice(1) : "diaphuong";
 let baiChon = null;
+let loiTai = "";
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -227,7 +228,14 @@ async function api(duongDan) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${duongDan}`, {
     headers: { apikey: SUPABASE_ANON, Authorization: `Bearer ${SUPABASE_ANON}` },
   });
-  if (!r.ok) throw new Error(`Lỗi ${r.status}`);
+  if (!r.ok) {
+    let chiTiet = "";
+    try { const j = await r.json(); chiTiet = j.message || j.hint || ""; } catch (e) {}
+    if (/dt_bai/.test(chiTiet) && /(not find|does not exist|schema cache)/i.test(chiTiet))
+      chiTiet = "Chưa có bảng dt_bai trên Supabase (chưa chạy file schema.sql, hoặc chạy ở project khác).";
+    else if (r.status === 401) chiTiet = "Khóa anon (SUPABASE_ANON) không đúng với project Supabase.";
+    throw new Error(`Lỗi ${r.status}${chiTiet ? ": " + chiTiet : ""}`);
+  }
   return r.json();
 }
 
@@ -264,11 +272,12 @@ async function taiMuc(m) {
 }
 
 async function taiTatCa() {
+  loiTai = "";
   $("#nutLamMoi").classList.add("dang-quay");
   if (!duLieu[mucChon]) veKhungXuong();
   try {
     await Promise.all([
-      ...MUC.map(m => taiMuc(m).catch(() => { duLieu[m.ma] = duLieu[m.ma] || null; })),
+      ...MUC.map(m => taiMuc(m).catch((e) => { loiTai = e.message || "Không kết nối được máy chủ."; duLieu[m.ma] = duLieu[m.ma] || null; })),
       api("dt_bai?select=quet_luc&order=quet_luc.desc&limit=1").then(r => {
         $("#capNhat").textContent = r[0] ? `Cập nhật ${thoiGianTuongDoi(r[0].quet_luc)}` : "Chưa có dữ liệu";
       }).catch(() => { $("#capNhat").textContent = "Mất kết nối"; }),
@@ -342,7 +351,7 @@ function veDanhSach() {
   const cot = $("#cotTrai");
   if (ds === undefined) { veKhungXuong(); return; }
   if (ds === null) {
-    cot.innerHTML = `<div class="trong"><b>Không tải được dữ liệu</b>Kiểm tra kết nối mạng rồi bấm nút tải lại ở góc trên.</div>`;
+    cot.innerHTML = `<div class="trong"><b>Không tải được dữ liệu</b>${esc(loiTai || "Kiểm tra kết nối mạng rồi bấm nút tải lại ở góc trên.")}</div>`;
     return;
   }
   let html = mucChon === "mxh" && ds.length ? veThongKe(ds) : "";
