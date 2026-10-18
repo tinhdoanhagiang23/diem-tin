@@ -202,6 +202,11 @@ button{font-family:inherit;cursor:pointer}
 const SUPABASE_URL = "https://elkysoeukqtweytkekwr.supabase.co";
 const SUPABASE_ANON = "DAN_KHOA_ANON_PUBLIC_VAO_DAY";
 
+// Khóa kiểu cũ (eyJ...) gửi thêm Authorization; khóa kiểu mới (sb_publishable_...) chỉ gửi apikey
+const HEADERS_SB = SUPABASE_ANON.startsWith("eyJ")
+  ? { apikey: SUPABASE_ANON, Authorization: `Bearer ${SUPABASE_ANON}` }
+  : { apikey: SUPABASE_ANON };
+
 const MUC = [
   { ma: "tieudiem",  ten: "Tiêu điểm 24h", nhan: "Trong nước",   ngay: 2,  gioiHan: 50,  mota: "tin nổi bật trong nước" },
   { ma: "quocte",    ten: "Quốc tế",       nhan: "Quốc tế",      ngay: 3,  gioiHan: 50,  mota: "tin thế giới" },
@@ -226,14 +231,16 @@ function linkAnToan(u) { return /^https?:\/\//i.test(u || "") ? u : null; }
 
 async function api(duongDan) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${duongDan}`, {
-    headers: { apikey: SUPABASE_ANON, Authorization: `Bearer ${SUPABASE_ANON}` },
+    headers: HEADERS_SB,
   });
   if (!r.ok) {
     let chiTiet = "";
     try { const j = await r.json(); chiTiet = j.message || j.hint || ""; } catch (e) {}
     if (/dt_bai/.test(chiTiet) && /(not find|does not exist|schema cache)/i.test(chiTiet))
       chiTiet = "Chưa có bảng dt_bai trên Supabase (chưa chạy file schema.sql, hoặc chạy ở project khác).";
-    else if (r.status === 401) chiTiet = "Khóa anon (SUPABASE_ANON) không đúng với project Supabase.";
+    else if (r.status === 401) chiTiet = SUPABASE_ANON.startsWith("DAN_KHOA")
+      ? "Chưa điền khóa anon vào dòng SUPABASE_ANON trong index.html."
+      : "Khóa SUPABASE_ANON không đúng với project Supabase (chép thiếu, thừa dấu cách hoặc khóa của project khác).";
     throw new Error(`Lỗi ${r.status}${chiTiet ? ": " + chiTiet : ""}`);
   }
   return r.json();
@@ -474,7 +481,7 @@ try {   // ghi lượt truy cập (giống bản Streamlit), mỗi phiên 1 lầ
   if (!sessionStorage.getItem("dt_da_ghi")) {
     fetch(`${SUPABASE_URL}/rest/v1/thong_ke_truy_cap`, {
       method: "POST",
-      headers: { apikey: SUPABASE_ANON, Authorization: `Bearer ${SUPABASE_ANON}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+      headers: { ...HEADERS_SB, "Content-Type": "application/json", Prefer: "return=minimal" },
       body: JSON.stringify({ ten_app: "Điểm tin & Social Listening" }),
     }).catch(() => {});
     sessionStorage.setItem("dt_da_ghi", "1");
