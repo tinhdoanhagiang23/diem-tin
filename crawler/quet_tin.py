@@ -402,7 +402,9 @@ def boc_noi_dung(link):
         return None
     doc = trafilatura.bare_extraction(
         r.content, url=r.url, with_metadata=True, include_comments=False,
-        include_tables=False, include_images=False, favor_precision=True)
+        include_tables=False, include_images=False, favor_precision=True,
+        date_extraction_params={"extensive_search": True, "original_date": True,
+                                "outputformat": "%Y-%m-%d"})
     if doc is None:
         return None
     if not isinstance(doc, dict):
@@ -415,7 +417,33 @@ def boc_noi_dung(link):
         "tom_tat": (doc.get("description") or "").strip(),
         "anh": doc.get("image") or None,
         "link_cuoi": r.url,
+        "ngay": doc.get("date"),
     }
+
+
+VN_TZ = dt.timezone(dt.timedelta(hours=7))
+
+
+def ngay_dang_that(ngay_bai, ts_rss):
+    """
+    Google News ghi thời gian theo lúc Google thấy bài, nên bài cũ được đăng lại/được
+    cập nhật vẫn hiện như tin mới. Nếu ngày đăng ghi TRÊN TRANG BÁO sớm hơn ngày trong RSS
+    thì lấy ngày trên trang báo (tính 07:00 sáng giờ Việt Nam ngày đó).
+    Trả về chuỗi ISO hoặc None nếu không cần sửa.
+    """
+    if not ngay_bai:
+        return None
+    try:
+        d = dt.datetime.strptime(ngay_bai[:10], "%Y-%m-%d").replace(hour=7, tzinfo=VN_TZ)
+    except ValueError:
+        return None
+    if d.year < 2000:
+        return None
+    if ts_rss is None:
+        return d.isoformat()
+    if d.date() < ts_rss.astimezone(VN_TZ).date():
+        return d.isoformat()
+    return None
 
 
 def xu_ly_mot_bai(rec):
@@ -441,6 +469,9 @@ def xu_ly_mot_bai(rec):
             "trang_thai": "ok",
             "link_goc": kq["link_cuoi"] or link_goc,
         })
+        ngay = ngay_dang_that(kq.get("ngay"), rec.get("ts"))
+        if ngay:
+            cap_nhat["thoi_gian"] = ngay
         if kq["tom_tat"]:
             cap_nhat["tom_tat"] = kq["tom_tat"][:600]
             cap_nhat["cam_xuc"] = analyze_sentiment(rec["title"] + " " + kq["tom_tat"])
