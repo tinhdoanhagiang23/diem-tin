@@ -94,13 +94,53 @@ OFFICIAL_WARD_NAMES = [
 ]
 OFFICIAL_WARD_NAMES_LOWER = [w.lower() for w in OFFICIAL_WARD_NAMES]
 
+# Tỉnh/thành khác (34 tỉnh mới + tên tỉnh cũ còn hay dùng). Bỏ "thái bình", "bình thuận",
+# "hà giang" vì trùng tên xã/phường hoặc chính là địa bàn của Tuyên Quang.
 OTHER_PROVINCE_SIGNALS = [
-    "hà nội", "hồ chí minh", "hải phòng", "đà nẵng", "huế", "lai châu", "điện biên", "sơn la",
-    "lào cai", "cao bằng", "lạng sơn", "thái nguyên", "phú thọ", "bắc ninh", "quảng ninh",
-    "ninh bình", "thanh hóa", "nghệ an", "hà tĩnh", "quảng trị", "quảng ngãi", "gia lai",
-    "khánh hòa", "lâm đồng", "đắk lắk", "đồng nai", "tây ninh", "cần thơ", "vĩnh long",
-    "đồng tháp", "cà mau", "an giang",
+    "hà nội", "hồ chí minh", "tp.hcm", "tphcm", "hải phòng", "đà nẵng", "huế", "lai châu",
+    "điện biên", "sơn la", "lào cai", "cao bằng", "lạng sơn", "thái nguyên", "phú thọ",
+    "bắc ninh", "hưng yên", "quảng ninh", "ninh bình", "thanh hóa", "nghệ an", "hà tĩnh",
+    "quảng trị", "quảng ngãi", "gia lai", "khánh hòa", "lâm đồng", "đắk lắk", "đăk lăk",
+    "đồng nai", "tây ninh", "cần thơ", "vĩnh long", "đồng tháp", "cà mau", "an giang",
+    # tên tỉnh cũ trước sáp nhập
+    "yên bái", "bắc giang", "bắc kạn", "hải dương", "nam định", "hà nam", "vĩnh phúc",
+    "hòa bình", "quảng bình", "quảng nam", "kon tum", "đắk nông", "đăk nông", "phú yên",
+    "bình định", "ninh thuận", "bình phước", "bình dương", "long an", "tiền giang",
+    "bến tre", "trà vinh", "sóc trăng", "hậu giang", "bạc liêu", "kiên giang",
+    "bà rịa", "vũng tàu",
 ]
+
+
+def _bo_dau(s):
+    import unicodedata
+    s = unicodedata.normalize("NFD", s.lower()).replace("đ", "d")
+    return "".join(c for c in s if unicodedata.category(c) != "Mn")
+
+
+def _regex_tu(ds):
+    """Khớp nguyên cụm từ (tránh 'huế' khớp nhầm trong 'thuế')."""
+    return re.compile(r"(?<!\w)(?:" + "|".join(re.escape(x) for x in ds) + r")(?!\w)")
+
+
+RE_TINH_KHAC = _regex_tu(OTHER_PROVINCE_SIGNALS)
+RE_XA_PHUONG = _regex_tu(OFFICIAL_WARD_NAMES_LOWER)
+# Dạng không dấu, viết liền để dò trong tên miền/tên nguồn (vd daklak.gov.vn, baolaocai.vn)
+SLUG_TINH_KHAC = sorted({_bo_dau(p).replace(" ", "").replace(".", "") for p in OTHER_PROVINCE_SIGNALS
+                         if len(_bo_dau(p).replace(" ", "")) >= 5})
+SLUG_TINH_NHA = ("tuyenquang", "hagiang")
+
+
+def nguon_tinh_khac(nguon="", link=""):
+    """Tên nguồn hoặc tên miền là của tỉnh khác (vd 'Báo Lào Cai', 'daklak.gov.vn')."""
+    if RE_TINH_KHAC.search((nguon or "").lower()):
+        return True
+    m = re.match(r"https?://([^/]+)", link or "")
+    chuoi = _bo_dau((nguon or "") + " " + (m.group(1) if m and "news.google." not in m.group(1) else ""))
+    chuoi = chuoi.replace(" ", "")
+    if any(x in chuoi for x in SLUG_TINH_NHA):
+        return False
+    return any(x in chuoi for x in SLUG_TINH_KHAC)
+
 
 NEG_WORDS = ['bức xúc', 'sai phạm', 'kêu cứu', 'phản ánh', 'ô nhiễm', 'ngập', 'xuống cấp', 'chậm tiến độ',
              'đền bù', 'giải tỏa', 'tệ nạn', 'vi phạm', 'bất cập', 'chưa được', 'lừa đảo', 'chiếm đoạt',
@@ -126,13 +166,26 @@ def build_ward_group_queries(group_size=10):
     return queries
 
 
-def is_local_content(title, summary):
+def nhac_tuyen_quang(text):
+    t = (text or "").lower()
+    return "tuyên quang" in t or "hà giang" in t
+
+
+def is_local_content(title, summary, nguon="", link=""):
+    """
+    - Nhắc rõ "Tuyên Quang" -> liên quan.
+    - Chỉ khớp tên xã/phường -> phải KHÔNG nhắc tỉnh khác, và nguồn/tên miền KHÔNG phải
+      của tỉnh khác (vd 'xã Tân Tiến' trên daklak.gov.vn là của Đắk Lắk).
+      Sau khi bóc được bài, script còn kiểm tra lại toàn văn (xem xu_ly_mot_bai).
+    """
     content = (title + " " + summary).lower()
     if "tuyên quang" in content:
         return True
-    if not any(name in content for name in OFFICIAL_WARD_NAMES_LOWER):
+    if not RE_XA_PHUONG.search(content):
         return False
-    return not any(p in content for p in OTHER_PROVINCE_SIGNALS)
+    if RE_TINH_KHAC.search(content):
+        return False
+    return not nguon_tinh_khac(nguon, link)
 
 
 def is_safe(title, link, summary):
@@ -255,7 +308,7 @@ def quet_tat_ca():
                 k = title_key(it["title"])
                 if not k or k in seen:
                     continue
-                if cfg["local"] and not is_local_content(it["title"], it["summary"]):
+                if cfg["local"] and not is_local_content(it["title"], it["summary"], it["nguon"], it["link"]):
                     continue
                 seen.add(k)
                 ds.append(it)
@@ -452,16 +505,35 @@ def xu_ly_mot_bai(rec):
     if not link_goc:
         link_goc = giai_ma_google(rec["link"]) if "news.google.com" in rec["link"] else rec["link"]
     cap_nhat = {"so_lan_thu": rec.get("so_lan_thu", 0) + 1}
+
+    # Tin vào mục Địa phương/MXH chỉ nhờ trùng tên xã (tiêu đề không có chữ "Tuyên Quang")
+    # -> cần kiểm tra thêm xem có đúng là tin của tỉnh mình không.
+    can_xac_minh = (bool(rec["muc"] & {"diaphuong", "mxh"})
+                    and "tuyên quang" not in (rec["title"] + " " + rec.get("summary", "")).lower())
+
     if not link_goc:
         cap_nhat["trang_thai"] = "loi"
         sb_cap_nhat(khoa, cap_nhat)
         return khoa, "không giải mã được link"
     cap_nhat["link_goc"] = link_goc
+    if can_xac_minh and nguon_tinh_khac(rec.get("nguon", ""), link_goc):
+        cap_nhat["ngoai_tinh"] = True
+
     try:
         kq = boc_noi_dung(link_goc)
     except Exception as ex:
         kq = None
         print("  ! Tải bài lỗi:", ex.__class__.__name__, link_goc[:80])
+
+    if kq:
+        ngay = ngay_dang_that(kq.get("ngay"), rec.get("ts"))
+        if ngay:
+            cap_nhat["thoi_gian"] = ngay
+        if kq["tom_tat"]:
+            cap_nhat["tom_tat"] = kq["tom_tat"][:600]
+        if can_xac_minh and nguon_tinh_khac("", kq["link_cuoi"] or ""):
+            cap_nhat["ngoai_tinh"] = True
+
     if kq and len(kq["noi_dung"]) >= 200:
         cap_nhat.update({
             "noi_dung": kq["noi_dung"],
@@ -469,17 +541,15 @@ def xu_ly_mot_bai(rec):
             "trang_thai": "ok",
             "link_goc": kq["link_cuoi"] or link_goc,
         })
-        ngay = ngay_dang_that(kq.get("ngay"), rec.get("ts"))
-        if ngay:
-            cap_nhat["thoi_gian"] = ngay
         if kq["tom_tat"]:
-            cap_nhat["tom_tat"] = kq["tom_tat"][:600]
             cap_nhat["cam_xuc"] = analyze_sentiment(rec["title"] + " " + kq["tom_tat"])
+        # Toàn văn không hề nhắc Tuyên Quang/Hà Giang -> tin của xã trùng tên ở tỉnh khác
+        if can_xac_minh and not nhac_tuyen_quang(kq["tom_tat"] + " " + kq["noi_dung"]):
+            cap_nhat["ngoai_tinh"] = True
         sb_cap_nhat(khoa, cap_nhat)
         return khoa, "ok"
+
     cap_nhat["trang_thai"] = "loi"
-    if kq and kq["tom_tat"]:
-        cap_nhat["tom_tat"] = kq["tom_tat"][:600]
     sb_cap_nhat(khoa, cap_nhat)
     return khoa, "không bóc được nội dung"
 
