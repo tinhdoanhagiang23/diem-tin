@@ -1,0 +1,33 @@
+name: Quét điểm tin
+
+on:
+  schedule:
+    # 30 phút một lần (giờ UTC; GitHub có thể chạy trễ vài phút lúc đông)
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}   # cho phép bấm "Run workflow" để chạy tay
+
+concurrency:
+  group: quet-tin
+  cancel-in-progress: false
+
+jobs:
+  quet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: crawler/requirements.txt
+
+      - name: Cài thư viện
+        run: pip install -r crawler/requirements.txt
+
+      - name: Quét tin và ghi vào Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python crawler/quet_tin.py
