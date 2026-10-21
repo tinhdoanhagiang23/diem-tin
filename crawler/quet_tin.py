@@ -7,11 +7,15 @@ Mỗi lần chạy:
   2. Ghi danh sách tin vào bảng Supabase `dt_bai`.
   3. Với tin mới: giải mã link Google News ra link báo gốc, tải bài và bóc nội dung
      (chế độ đọc) để trang web hiện ngay khi bấm vào tin.
-  4. Xóa tin cũ hơn 30 ngày cho nhẹ cơ sở dữ liệu.
+  4. Chấm lại sắc thái cho tin 7 ngày gần nhất (để tin cũ cũng được sửa khi bộ từ điển thay đổi).
+  5. Xóa tin cũ hơn 30 ngày cho nhẹ cơ sở dữ liệu.
 
 Biến môi trường cần có (đặt trong GitHub > Settings > Secrets and variables > Actions):
   SUPABASE_URL          vd: https://elkysoeukqtweytkekwr.supabase.co
   SUPABASE_SERVICE_KEY  khóa service_role (KHÔNG phải anon key, KHÔNG đưa vào index.html)
+
+Thử bộ chấm sắc thái trên máy (không cần Supabase):
+  python crawler/quet_tin.py --thu "Tiêu đề tin" "Tóm tắt (sapo) nếu có"
 """
 
 import base64
@@ -24,6 +28,7 @@ import re
 import sys
 import threading
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import quote
 
@@ -38,6 +43,7 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
 SO_NGAY_LUU = 30          # xóa tin cũ hơn số ngày này
+SO_NGAY_CHAM_LAI = 7      # chấm lại sắc thái cho tin trong bấy nhiêu ngày gần nhất
 MAX_TRICH_XUAT = 150      # số bài tối đa bóc nội dung mỗi lần chạy
 SO_LAN_THU_TOI_DA = 3     # bài bóc lỗi sẽ thử lại tối đa bấy nhiêu lần
 SO_LUONG = 4              # số luồng tải bài song song
@@ -112,7 +118,6 @@ OTHER_PROVINCE_SIGNALS = [
 
 
 def _bo_dau(s):
-    import unicodedata
     s = unicodedata.normalize("NFD", s.lower()).replace("đ", "d")
     return "".join(c for c in s if unicodedata.category(c) != "Mn")
 
@@ -142,11 +147,106 @@ def nguon_tinh_khac(nguon="", link=""):
     return any(x in chuoi for x in SLUG_TINH_KHAC)
 
 
-NEG_WORDS = ['bức xúc', 'sai phạm', 'kêu cứu', 'phản ánh', 'ô nhiễm', 'ngập', 'xuống cấp', 'chậm tiến độ',
-             'đền bù', 'giải tỏa', 'tệ nạn', 'vi phạm', 'bất cập', 'chưa được', 'lừa đảo', 'chiếm đoạt',
-             'bắt giữ', 'khởi tố']
-POS_WORDS = ['biểu dương', 'khen thưởng', 'hoàn thành', 'vượt mức', 'xây dựng nông thôn mới', 'khang trang',
-             'hiệu quả', 'ủng hộ', 'đóng góp', 'khắc phục', 'phát triển', 'thành công']
+# =====================================================================
+# PHÂN LOẠI SẮC THÁI (bản 2)
+# ---------------------------------------------------------------------
+# Nguyên tắc: chấm theo TÁC ĐỘNG của tin đến hình ảnh địa phương, chính quyền,
+# không chấm theo việc tin có xuất hiện từ ngữ về tội phạm hay không.
+#   - Tiêu đề tính gấp đôi tóm tắt (tiêu đề nói rõ ý chính của bài).
+#   - Khớp nguyên cụm từ, chuẩn hóa Unicode (tránh 'ngập' trong 'ngập tràn niềm vui').
+#   - Từ ngữ pháp luật/tội phạm (vi phạm, ma túy, bị cáo, khởi tố...) KHÔNG bị tính
+#     tiêu cực khi bài nói về hoạt động tuyên truyền, phòng ngừa, đấu tranh, triệt phá...
+#     (vd phiên tòa giả định, tuyên truyền pháp luật, Công an triệt phá đường dây ma túy).
+# Muốn chỉnh: thêm/bớt cụm từ ở 4 bảng dưới, con số là trọng số.
+# =====================================================================
+
+# Tiêu cực "dân sinh": luôn tính, vì đây là loại tin dễ gây bức xúc dư luận
+NEG_DAN_SINH = {
+    "bức xúc": 2, "kêu cứu": 2, "sai phạm": 2, "ô nhiễm": 2, "gây phẫn nộ": 2, "phẫn nộ": 2,
+    "tử vong": 2, "thiệt mạng": 2, "nợ lương": 2, "ăn chặn": 2, "nhũng nhiễu": 2,
+    "hách dịch": 2, "thất thoát": 2, "chưa được giải quyết": 2, "chưa được xử lý": 2,
+    "chưa được bồi thường": 2, "chưa được khắc phục": 2, "chưa được hỗ trợ": 2,
+    "phản ánh": 1, "xuống cấp": 1, "chậm tiến độ": 1, "bất cập": 1, "lãng phí": 1,
+    "ngập úng": 1, "ngập lụt": 1, "bị ngập": 1, "ngập sâu": 1, "sạt lở": 1, "lũ quét": 1,
+    "tai nạn": 1, "mất an toàn": 1, "khiếu kiện": 1, "tố cáo": 1, "đình trệ": 1,
+}
+
+# Tiêu cực "pháp luật": chỉ tính khi bài KHÔNG thuộc ngữ cảnh tuyên truyền/đấu tranh
+NEG_PHAP_LUAT = {
+    "lừa đảo": 2, "chiếm đoạt": 2, "khởi tố": 2, "giết người": 2, "tham nhũng": 2,
+    "tham ô": 2, "hối lộ": 2,
+    "vi phạm": 1, "tệ nạn": 1, "bắt giữ": 1, "bắt tạm giam": 1, "truy tố": 1, "xét xử": 1,
+    "bị cáo": 1, "tội phạm": 1, "ma túy": 1, "đánh bạc": 1, "trộm cắp": 1,
+    "cố ý gây thương tích": 1, "buôn lậu": 1, "gian lận": 1, "vụ án": 1,
+}
+
+# Ngữ cảnh tuyên truyền, phòng ngừa, đấu tranh: có cụm này thì bỏ qua bảng NEG_PHAP_LUAT
+# và cộng thêm điểm tích cực
+NGU_CANH_DAU_TRANH = [
+    "phiên tòa giả định", "giả định", "tuyên truyền", "phổ biến pháp luật",
+    "phổ biến, giáo dục pháp luật", "giáo dục pháp luật", "trợ giúp pháp lý",
+    "phòng ngừa", "phòng, chống", "phòng chống", "ngăn chặn", "đấu tranh", "triệt phá",
+    "ra quân", "tập huấn", "hội thi", "cao điểm", "kiểm sát", "truy bắt thành công",
+]
+DIEM_NGU_CANH = 2
+
+POS_WORDS = {
+    "biểu dương": 2, "khen thưởng": 2, "tuyên dương": 2, "vượt mức": 2, "vượt kế hoạch": 2,
+    "khánh thành": 2, "đạt giải": 2, "giải nhất": 2,
+    "hoàn thành": 1, "nông thôn mới": 1, "khang trang": 1, "hiệu quả": 1, "ủng hộ": 1,
+    "đóng góp": 1, "khắc phục": 1, "phát triển": 1, "thành công": 1, "tăng trưởng": 1,
+    "tăng tốc": 1, "khởi công": 1, "trao tặng": 1, "tặng quà": 1, "hỗ trợ": 1,
+    "chúc mừng": 1, "tri ân": 1, "kỷ niệm": 1, "thăm hỏi": 1, "quảng bá": 1, "đón nhận": 1,
+}
+
+
+def _chuan_hoa(text):
+    """NFC + chữ thường + gộp khoảng trắng (một số báo dùng Unicode tổ hợp làm khớp trượt)."""
+    return " ".join(unicodedata.normalize("NFC", text or "").lower().split())
+
+
+def _bo_khop(bang):
+    tu = sorted(bang, key=len, reverse=True)  # cụm dài khớp trước
+    return re.compile(r"(?<!\w)(" + "|".join(re.escape(x) for x in tu) + r")(?!\w)")
+
+
+RE_NEG_DAN_SINH = _bo_khop(NEG_DAN_SINH)
+RE_NEG_PHAP_LUAT = _bo_khop(NEG_PHAP_LUAT)
+RE_POS = _bo_khop(POS_WORDS)
+RE_NGU_CANH = _bo_khop(NGU_CANH_DAU_TRANH)
+
+
+def _diem_doan(text, ngu_canh_dau_tranh):
+    """Trả về (điểm tích cực, điểm tiêu cực, danh sách cụm đã khớp) của một đoạn."""
+    pos = neg = 0
+    khop = []
+    for m in RE_POS.finditer(text):
+        pos += POS_WORDS[m.group(1)]
+        khop.append("+" + m.group(1))
+    for m in RE_NEG_DAN_SINH.finditer(text):
+        neg += NEG_DAN_SINH[m.group(1)]
+        khop.append("-" + m.group(1))
+    if not ngu_canh_dau_tranh:
+        for m in RE_NEG_PHAP_LUAT.finditer(text):
+            neg += NEG_PHAP_LUAT[m.group(1)]
+            khop.append("-" + m.group(1))
+    return pos, neg, khop
+
+
+def phan_tich_sac_thai(tieu_de, tom_tat=""):
+    """Trả về dict: nhan (Tích cực/Trung lập/Tiêu cực), diem, ngu_canh, khop (để dò lỗi)."""
+    td, tt = _chuan_hoa(tieu_de), _chuan_hoa(tom_tat)
+    ngu_canh = sorted({m.group(1) for m in RE_NGU_CANH.finditer(td + " " + tt)})
+    p1, n1, k1 = _diem_doan(td, bool(ngu_canh))
+    p2, n2, k2 = _diem_doan(tt, bool(ngu_canh))
+    diem = 2 * (p1 - n1) + (p2 - n2) + (DIEM_NGU_CANH if ngu_canh else 0)
+    nhan = "Tiêu cực" if diem < 0 else "Tích cực" if diem > 0 else "Trung lập"
+    return {"nhan": nhan, "diem": diem, "ngu_canh": ngu_canh,
+            "khop_tieu_de": k1, "khop_tom_tat": k2}
+
+
+def analyze_sentiment(tieu_de, tom_tat=""):
+    return phan_tich_sac_thai(tieu_de, tom_tat)["nhan"]
 
 
 # =====================================================================
@@ -197,17 +297,6 @@ def clean_html(raw_html):
     if not raw_html:
         return ""
     return " ".join(re.sub(r"<.*?>", "", raw_html).split())
-
-
-def analyze_sentiment(text):
-    text = text.lower()
-    neg = sum(1 for w in NEG_WORDS if w in text)
-    pos = sum(1 for w in POS_WORDS if w in text)
-    if neg > pos:
-        return "Tiêu cực"
-    if pos > neg:
-        return "Tích cực"
-    return "Trung lập"
 
 
 def title_key(title):
@@ -373,6 +462,27 @@ def sb_cap_nhat(khoa, data):
         print("  ! Lỗi cập nhật", khoa, r.status_code, r.text[:200])
 
 
+def sb_cham_lai_sac_thai():
+    """Chấm lại sắc thái cho tin gần đây, chỉ ghi những tin có nhãn thay đổi."""
+    moc = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=SO_NGAY_CHAM_LAI)).isoformat()
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/dt_bai",
+            params={"select": "khoa,tieu_de,tom_tat,cam_xuc", "thoi_gian": f"gte.{moc}", "limit": "3000"},
+            headers=sb_headers(), timeout=60)
+        r.raise_for_status()
+    except Exception as ex:
+        print("  ! Không lấy được tin để chấm lại:", ex)
+        return
+    doi = 0
+    for row in r.json():
+        moi = analyze_sentiment(row.get("tieu_de") or "", row.get("tom_tat") or "")
+        if moi != row.get("cam_xuc"):
+            sb_cap_nhat(row["khoa"], {"cam_xuc": moi})
+            doi += 1
+    print(f"Chấm lại sắc thái: đổi nhãn {doi} tin.")
+
+
 def sb_xoa_tin_cu():
     moc = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=SO_NGAY_LUU)).isoformat()
     r = requests.delete(
@@ -531,6 +641,7 @@ def xu_ly_mot_bai(rec):
             cap_nhat["thoi_gian"] = ngay
         if kq["tom_tat"]:
             cap_nhat["tom_tat"] = kq["tom_tat"][:600]
+            cap_nhat["cam_xuc"] = analyze_sentiment(rec["title"], kq["tom_tat"])
         if can_xac_minh and nguon_tinh_khac("", kq["link_cuoi"] or ""):
             cap_nhat["ngoai_tinh"] = True
 
@@ -541,8 +652,6 @@ def xu_ly_mot_bai(rec):
             "trang_thai": "ok",
             "link_goc": kq["link_cuoi"] or link_goc,
         })
-        if kq["tom_tat"]:
-            cap_nhat["cam_xuc"] = analyze_sentiment(rec["title"] + " " + kq["tom_tat"])
         # Toàn văn không hề nhắc Tuyên Quang/Hà Giang -> tin của xã trùng tên ở tỉnh khác
         if can_xac_minh and not nhac_tuyen_quang(kq["tom_tat"] + " " + kq["noi_dung"]):
             cap_nhat["ngoai_tinh"] = True
@@ -557,61 +666,73 @@ def xu_ly_mot_bai(rec):
 # =====================================================================
 # CHẠY
 # =====================================================================
+def thu_sac_thai(tieu_de, tom_tat=""):
+    kq = phan_tich_sac_thai(tieu_de, tom_tat)
+    print(f"Nhãn      : {kq['nhan']}  (điểm {kq['diem']})")
+    print(f"Ngữ cảnh  : {', '.join(kq['ngu_canh']) or '—'}")
+    print(f"Tiêu đề   : {', '.join(kq['khop_tieu_de']) or '—'}  (x2)")
+    print(f"Tóm tắt   : {', '.join(kq['khop_tom_tat']) or '—'}")
+
+
 def main():
+    if len(sys.argv) >= 3 and sys.argv[1] == "--thu":
+        thu_sac_thai(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "")
+        return
+
     if not SUPABASE_URL or not SUPABASE_KEY:
         sys.exit("Thiếu SUPABASE_URL hoặc SUPABASE_SERVICE_KEY")
 
     t0 = time.time()
     bai = quet_tat_ca()
     print(f"\nTổng cộng {len(bai)} tin khác nhau.")
-    if not bai:
-        return
 
-    co_san = sb_lay_ban_ghi(bai.keys())
-    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    if bai:
+        co_san = sb_lay_ban_ghi(bai.keys())
+        now = dt.datetime.now(dt.timezone.utc).isoformat()
 
-    moi, cu = [], []
-    for khoa, rec in bai.items():
-        old = co_san.get(khoa)
-        if old:
-            muc = sorted(set(old.get("muc") or []) | rec["muc"])
-            cu.append({"khoa": khoa, "tieu_de": rec["title"], "muc": muc, "quet_luc": now})
-            rec["link_goc"] = old.get("link_goc")
-            rec["trang_thai"] = old.get("trang_thai")
-            rec["so_lan_thu"] = old.get("so_lan_thu") or 0
-        else:
-            moi.append({
-                "khoa": khoa, "muc": sorted(rec["muc"]), "tieu_de": rec["title"], "nguon": rec["nguon"],
-                "link_rss": rec["link"], "tom_tat": rec["summary"] or None,
-                "cam_xuc": analyze_sentiment(rec["title"] + " " + rec["summary"]),
-                "thoi_gian": rec["ts"].isoformat() if rec["ts"] else now,
-                "quet_luc": now, "trang_thai": "cho", "so_lan_thu": 0,
-            })
-            rec["trang_thai"], rec["so_lan_thu"] = "cho", 0
+        moi, cu = [], []
+        for khoa, rec in bai.items():
+            old = co_san.get(khoa)
+            if old:
+                muc = sorted(set(old.get("muc") or []) | rec["muc"])
+                cu.append({"khoa": khoa, "tieu_de": rec["title"], "muc": muc, "quet_luc": now})
+                rec["link_goc"] = old.get("link_goc")
+                rec["trang_thai"] = old.get("trang_thai")
+                rec["so_lan_thu"] = old.get("so_lan_thu") or 0
+            else:
+                moi.append({
+                    "khoa": khoa, "muc": sorted(rec["muc"]), "tieu_de": rec["title"], "nguon": rec["nguon"],
+                    "link_rss": rec["link"], "tom_tat": rec["summary"] or None,
+                    "cam_xuc": analyze_sentiment(rec["title"], rec["summary"]),
+                    "thoi_gian": rec["ts"].isoformat() if rec["ts"] else now,
+                    "quet_luc": now, "trang_thai": "cho", "so_lan_thu": 0,
+                })
+                rec["trang_thai"], rec["so_lan_thu"] = "cho", 0
 
-    print(f"Tin mới: {len(moi)} · Tin đã có: {len(cu)}")
-    if moi:
-        sb_upsert(moi)
-    if cu:
-        sb_upsert(cu)
+        print(f"Tin mới: {len(moi)} · Tin đã có: {len(cu)}")
+        if moi:
+            sb_upsert(moi)
+        if cu:
+            sb_upsert(cu)
 
-    # Bóc nội dung cho tin chưa có, ưu tiên tin mới nhất
-    can_boc = [r for r in bai.values()
-               if r["trang_thai"] in ("cho", "loi") and r["so_lan_thu"] < SO_LAN_THU_TOI_DA]
-    can_boc.sort(key=lambda x: x["ts"].timestamp() if x["ts"] else 0, reverse=True)
-    can_boc = can_boc[:MAX_TRICH_XUAT]
-    print(f"\nBóc nội dung {len(can_boc)} bài...")
-    dem = {"ok": 0, "loi": 0}
-    with ThreadPoolExecutor(max_workers=SO_LUONG) as pool:
-        for f in as_completed([pool.submit(xu_ly_mot_bai, r) for r in can_boc]):
-            try:
-                _, kq = f.result()
-                dem["ok" if kq == "ok" else "loi"] += 1
-            except Exception as ex:
-                dem["loi"] += 1
-                print("  ! Lỗi xử lý:", ex)
-    print(f"   -> bóc được {dem['ok']}, lỗi {dem['loi']}")
+        # Bóc nội dung cho tin chưa có, ưu tiên tin mới nhất
+        can_boc = [r for r in bai.values()
+                   if r["trang_thai"] in ("cho", "loi") and r["so_lan_thu"] < SO_LAN_THU_TOI_DA]
+        can_boc.sort(key=lambda x: x["ts"].timestamp() if x["ts"] else 0, reverse=True)
+        can_boc = can_boc[:MAX_TRICH_XUAT]
+        print(f"\nBóc nội dung {len(can_boc)} bài...")
+        dem = {"ok": 0, "loi": 0}
+        with ThreadPoolExecutor(max_workers=SO_LUONG) as pool:
+            for f in as_completed([pool.submit(xu_ly_mot_bai, r) for r in can_boc]):
+                try:
+                    _, kq = f.result()
+                    dem["ok" if kq == "ok" else "loi"] += 1
+                except Exception as ex:
+                    dem["loi"] += 1
+                    print("  ! Lỗi xử lý:", ex)
+        print(f"   -> bóc được {dem['ok']}, lỗi {dem['loi']}")
 
+    sb_cham_lai_sac_thai()
     sb_xoa_tin_cu()
     print(f"\nXong sau {time.time() - t0:.0f} giây.")
 
