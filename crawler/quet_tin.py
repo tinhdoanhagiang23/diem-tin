@@ -7,7 +7,7 @@ Mỗi lần chạy:
   2. Ghi danh sách tin vào bảng Supabase `dt_bai`.
   3. Với tin mới: giải mã link Google News ra link báo gốc, tải bài và bóc nội dung
      (chế độ đọc) để trang web hiện ngay khi bấm vào tin.
-  4. Chấm lại sắc thái cho tin 7 ngày gần nhất (để tin cũ cũng được sửa khi bộ từ điển thay đổi).
+  4. Rà lại tin 7 ngày gần nhất: chấm lại sắc thái, ẩn tin ngoài tỉnh lọt vào trước đó.
   5. Xóa tin cũ hơn 30 ngày cho nhẹ cơ sở dữ liệu.
 
 Biến môi trường cần có (đặt trong GitHub > Settings > Secrets and variables > Actions):
@@ -16,6 +16,8 @@ Biến môi trường cần có (đặt trong GitHub > Settings > Secrets and va
 
 Thử bộ chấm sắc thái trên máy (không cần Supabase):
   python crawler/quet_tin.py --thu "Tiêu đề tin" "Tóm tắt (sapo) nếu có"
+Thử bộ lọc địa bàn:
+  python crawler/quet_tin.py --thu-dia-ban "Tiêu đề tin" "Tên nguồn"
 """
 
 import base64
@@ -266,19 +268,37 @@ def build_ward_group_queries(group_size=10):
     return queries
 
 
-def nhac_tuyen_quang(text):
-    t = (text or "").lower()
+# "xã Tuyên Quang", "thôn Hà Giang"... là địa danh TRÙNG TÊN ở tỉnh khác (vd xã Tuyên Quang
+# thuộc tỉnh Lâm Đồng), không phải tỉnh mình. Giữ nguyên "phường Hà Giang 1/2" vì là của tỉnh mình.
+RE_DIA_DANH_TRUNG_TEN = re.compile(
+    r"(?<!\w)(?:xã|phường|thị trấn|thôn|bản|xóm|làng|tổ dân phố|ấp|khu phố)\s+"
+    r"(?:tuyên quang(?!\w)|hà giang(?!\s*\d)(?!\w))")
+
+
+def _bo_dia_danh_trung(text):
+    t = unicodedata.normalize("NFC", text or "").lower()
+    return RE_DIA_DANH_TRUNG_TEN.sub(" ", t)
+
+
+def nhac_tinh_nha(text):
+    """Có nhắc đến TỈNH Tuyên Quang (hoặc Hà Giang cũ), không tính 'xã Tuyên Quang' của tỉnh khác."""
+    t = _bo_dia_danh_trung(text)
     return "tuyên quang" in t or "hà giang" in t
+
+
+def nhac_tuyen_quang(text):
+    return nhac_tinh_nha(text)
 
 
 def is_local_content(title, summary, nguon="", link=""):
     """
-    - Nhắc rõ "Tuyên Quang" -> liên quan.
+    - Nhắc rõ tỉnh "Tuyên Quang" -> liên quan ("xã Tuyên Quang", "Công an xã Tuyên Quang"
+      là xã trùng tên ở tỉnh Lâm Đồng nên KHÔNG tính).
     - Chỉ khớp tên xã/phường -> phải KHÔNG nhắc tỉnh khác, và nguồn/tên miền KHÔNG phải
       của tỉnh khác (vd 'xã Tân Tiến' trên daklak.gov.vn là của Đắk Lắk).
       Sau khi bóc được bài, script còn kiểm tra lại toàn văn (xem xu_ly_mot_bai).
     """
-    content = (title + " " + summary).lower()
+    content = _bo_dia_danh_trung(title + " " + summary)
     if "tuyên quang" in content:
         return True
     if not RE_XA_PHUONG.search(content):
@@ -463,24 +483,37 @@ def sb_cap_nhat(khoa, data):
 
 
 def sb_cham_lai_sac_thai():
-    """Chấm lại sắc thái cho tin gần đây, chỉ ghi những tin có nhãn thay đổi."""
+    """
+    Rà lại tin gần đây (chỉ ghi những tin có thay đổi):
+      - chấm lại sắc thái theo bộ từ điển hiện tại;
+      - tin mục Địa phương/MXH không còn qua bộ lọc địa bàn -> đánh dấu ngoai_tinh để ẩn
+        (vd tin "Công an xã Tuyên Quang" của Lâm Đồng đã lọt vào trước khi sửa bộ lọc).
+    """
     moc = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=SO_NGAY_CHAM_LAI)).isoformat()
     try:
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/dt_bai",
-            params={"select": "khoa,tieu_de,tom_tat,cam_xuc", "thoi_gian": f"gte.{moc}", "limit": "3000"},
+            params={"select": "khoa,tieu_de,tom_tat,cam_xuc,muc,nguon,link_goc,ngoai_tinh", "thoi_gian": f"gte.{moc}", "limit": "3000"},
             headers=sb_headers(), timeout=60)
         r.raise_for_status()
     except Exception as ex:
         print("  ! Không lấy được tin để chấm lại:", ex)
         return
-    doi = 0
+    doi = an = 0
     for row in r.json():
+        cap_nhat = {}
         moi = analyze_sentiment(row.get("tieu_de") or "", row.get("tom_tat") or "")
         if moi != row.get("cam_xuc"):
-            sb_cap_nhat(row["khoa"], {"cam_xuc": moi})
+            cap_nhat["cam_xuc"] = moi
             doi += 1
-    print(f"Chấm lại sắc thái: đổi nhãn {doi} tin.")
+        if (set(row.get("muc") or []) & {"diaphuong", "mxh"} and not row.get("ngoai_tinh")
+                and not is_local_content(row.get("tieu_de") or "", row.get("tom_tat") or "",
+                                         row.get("nguon") or "", row.get("link_goc") or "")):
+            cap_nhat["ngoai_tinh"] = True
+            an += 1
+        if cap_nhat:
+            sb_cap_nhat(row["khoa"], cap_nhat)
+    print(f"Rà lại: đổi nhãn sắc thái {doi} tin, ẩn {an} tin ngoài tỉnh.")
 
 
 def sb_xoa_tin_cu():
@@ -619,7 +652,7 @@ def xu_ly_mot_bai(rec):
     # Tin vào mục Địa phương/MXH chỉ nhờ trùng tên xã (tiêu đề không có chữ "Tuyên Quang")
     # -> cần kiểm tra thêm xem có đúng là tin của tỉnh mình không.
     can_xac_minh = (bool(rec["muc"] & {"diaphuong", "mxh"})
-                    and "tuyên quang" not in (rec["title"] + " " + rec.get("summary", "")).lower())
+                    and "tuyên quang" not in _bo_dia_danh_trung(rec["title"] + " " + rec.get("summary", "")))
 
     if not link_goc:
         cap_nhat["trang_thai"] = "loi"
@@ -675,6 +708,11 @@ def thu_sac_thai(tieu_de, tom_tat=""):
 
 
 def main():
+    if len(sys.argv) >= 3 and sys.argv[1] == "--thu-dia-ban":
+        nguon = sys.argv[3] if len(sys.argv) > 3 else ""
+        ok = is_local_content(sys.argv[2], "", nguon, "")
+        print("Địa bàn:", "THUỘC Tuyên Quang -> giữ" if ok else "NGOÀI tỉnh -> loại")
+        return
     if len(sys.argv) >= 3 and sys.argv[1] == "--thu":
         thu_sac_thai(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "")
         return
