@@ -162,18 +162,30 @@ def nguon_tinh_khac(nguon="", link=""):
 # Muốn chỉnh: thêm/bớt cụm từ ở 4 bảng dưới, con số là trọng số.
 # =====================================================================
 
-# Tiêu cực "dân sinh": luôn tính, vì đây là loại tin dễ gây bức xúc dư luận
+# ---- 3 NHÓM TỪ TIÊU CỰC ----
+# Dân sinh, quản lý: luôn tính (loại tin dễ gây bức xúc dư luận)
 NEG_DAN_SINH = {
     "bức xúc": 2, "kêu cứu": 2, "sai phạm": 2, "ô nhiễm": 2, "gây phẫn nộ": 2, "phẫn nộ": 2,
-    "tử vong": 2, "thiệt mạng": 2, "nợ lương": 2, "ăn chặn": 2, "nhũng nhiễu": 2,
-    "hách dịch": 2, "thất thoát": 2, "chưa được giải quyết": 2, "chưa được xử lý": 2,
-    "chưa được bồi thường": 2, "chưa được khắc phục": 2, "chưa được hỗ trợ": 2,
+    "nợ lương": 2, "ăn chặn": 2, "nhũng nhiễu": 2, "hách dịch": 2, "thất thoát": 2,
+    "chưa được giải quyết": 2, "chưa được xử lý": 2, "chưa được bồi thường": 2,
+    "chưa được khắc phục": 2, "chưa được hỗ trợ": 2, "quá tải": 1,
+    "hôi thối": 2, "ruồi nhặng": 1, "bủa vây": 1, "nứt nẻ": 1, "lầy lội": 1, "mất nước": 1,
+    "mất điện": 1, "thiếu nước": 1, "kêu trời": 2, "khốn khổ": 2,
     "phản ánh": 1, "xuống cấp": 1, "chậm tiến độ": 1, "bất cập": 1, "lãng phí": 1,
-    "ngập úng": 1, "ngập lụt": 1, "bị ngập": 1, "ngập sâu": 1, "sạt lở": 1, "lũ quét": 1,
-    "tai nạn": 1, "mất an toàn": 1, "khiếu kiện": 1, "tố cáo": 1, "đình trệ": 1,
+    "khiếu kiện": 1, "tố cáo": 1, "đình trệ": 1,
+    # thương vong: chỉ được bỏ qua khi bài là diễn tập/giả định
+    "tử vong": 2, "thiệt mạng": 2, "mất tích": 2, "thương vong": 2,
 }
 
-# Tiêu cực "pháp luật": chỉ tính khi bài KHÔNG thuộc ngữ cảnh tuyên truyền/đấu tranh
+# Thiên tai, sự cố: bỏ qua khi TIÊU ĐỀ nói về ứng phó, phòng chống, cứu hộ, khắc phục
+NEG_SU_CO = {
+    "sạt lở": 1, "lũ quét": 1, "lũ ống": 1, "lũ lụt": 1, "mưa lũ": 1, "ngập úng": 1,
+    "ngập lụt": 1, "bị ngập": 1, "ngập sâu": 1, "thiên tai": 1, "thiệt hại": 1,
+    "tai nạn": 1, "mất an toàn": 1, "cháy rừng": 1, "hỏa hoạn": 1, "cháy nổ": 1,
+    "sự cố": 1, "dông lốc": 1, "mưa đá": 1, "rét đậm": 1, "rét hại": 1,
+}
+
+# Pháp luật, tội phạm: bỏ qua khi TIÊU ĐỀ nói về tuyên truyền, đấu tranh, kiểm sát, triệt phá
 NEG_PHAP_LUAT = {
     "lừa đảo": 2, "chiếm đoạt": 2, "khởi tố": 2, "giết người": 2, "tham nhũng": 2,
     "tham ô": 2, "hối lộ": 2,
@@ -182,13 +194,26 @@ NEG_PHAP_LUAT = {
     "cố ý gây thương tích": 1, "buôn lậu": 1, "gian lận": 1, "vụ án": 1,
 }
 
-# Ngữ cảnh tuyên truyền, phòng ngừa, đấu tranh: có cụm này thì bỏ qua bảng NEG_PHAP_LUAT
-# và cộng thêm điểm tích cực
+# ---- 3 NHÓM NGỮ CẢNH (mỗi nhóm có ngữ cảnh: +2 điểm và bỏ qua nhóm từ tiêu cực tương ứng) ----
+# Diễn tập, giả định: tình huống không có thật -> bỏ qua TẤT CẢ từ tiêu cực.
+# Xét cả tiêu đề lẫn sapo (sapo bài diễn tập hay viết "giả định mưa lớn gây sạt lở...").
+NGU_CANH_GIA_DINH = [
+    "diễn tập", "giả định", "phiên tòa giả định", "tình huống giả định", "thực binh",
+]
+# Ứng phó, phòng chống thiên tai: chỉ xét TIÊU ĐỀ (tránh tin thiên tai thật bị tính tích cực
+# chỉ vì sapo có câu "lực lượng chức năng đang ứng phó")
+NGU_CANH_UNG_PHO = [
+    "ứng phó", "phòng thủ dân sự", "phòng, chống thiên tai", "phòng chống thiên tai",
+    "phòng, chống lụt bão", "phòng chống lụt bão", "cứu hộ", "cứu nạn", "tìm kiếm cứu nạn",
+    "khắc phục hậu quả", "sơ tán", "di dời dân", "chủ động phòng", "sẵn sàng", "hỗ trợ người dân",
+    "giúp dân", "phòng cháy", "chữa cháy", "pccc",
+]
+# Tuyên truyền, đấu tranh pháp luật: chỉ xét TIÊU ĐỀ (tránh "Khởi tố đối tượng lừa đảo"
+# bị tính tích cực chỉ vì sapo có chữ "đấu tranh")
 NGU_CANH_DAU_TRANH = [
-    "phiên tòa giả định", "giả định", "tuyên truyền", "phổ biến pháp luật",
-    "phổ biến, giáo dục pháp luật", "giáo dục pháp luật", "trợ giúp pháp lý",
-    "phòng ngừa", "phòng, chống", "phòng chống", "ngăn chặn", "đấu tranh", "triệt phá",
-    "ra quân", "tập huấn", "hội thi", "cao điểm", "kiểm sát", "truy bắt thành công",
+    "tuyên truyền", "phổ biến pháp luật", "phổ biến, giáo dục pháp luật", "giáo dục pháp luật",
+    "trợ giúp pháp lý", "phòng ngừa", "phòng, chống", "phòng chống", "ngăn chặn", "đấu tranh",
+    "triệt phá", "ra quân", "tập huấn", "hội thi", "cao điểm", "kiểm sát", "truy bắt thành công",
 ]
 DIEM_NGU_CANH = 2
 
@@ -199,6 +224,7 @@ POS_WORDS = {
     "đóng góp": 1, "khắc phục": 1, "phát triển": 1, "thành công": 1, "tăng trưởng": 1,
     "tăng tốc": 1, "khởi công": 1, "trao tặng": 1, "tặng quà": 1, "hỗ trợ": 1,
     "chúc mừng": 1, "tri ân": 1, "kỷ niệm": 1, "thăm hỏi": 1, "quảng bá": 1, "đón nhận": 1,
+    "chủ động": 1, "nâng cao": 1, "thúc đẩy": 1,
 }
 
 
@@ -212,25 +238,33 @@ def _bo_khop(bang):
     return re.compile(r"(?<!\w)(" + "|".join(re.escape(x) for x in tu) + r")(?!\w)")
 
 
-RE_NEG_DAN_SINH = _bo_khop(NEG_DAN_SINH)
-RE_NEG_PHAP_LUAT = _bo_khop(NEG_PHAP_LUAT)
 RE_POS = _bo_khop(POS_WORDS)
-RE_NGU_CANH = _bo_khop(NGU_CANH_DAU_TRANH)
+NHOM_TIEU_CUC = [  # (tên nhóm, bảng từ, regex)
+    ("dan_sinh", NEG_DAN_SINH, _bo_khop(NEG_DAN_SINH)),
+    ("su_co", NEG_SU_CO, _bo_khop(NEG_SU_CO)),
+    ("phap_luat", NEG_PHAP_LUAT, _bo_khop(NEG_PHAP_LUAT)),
+]
+RE_GIA_DINH = _bo_khop(NGU_CANH_GIA_DINH)
+RE_UNG_PHO = _bo_khop(NGU_CANH_UNG_PHO)
+RE_DAU_TRANH = _bo_khop(NGU_CANH_DAU_TRANH)
 
 
-def _diem_doan(text, ngu_canh_dau_tranh):
-    """Trả về (điểm tích cực, điểm tiêu cực, danh sách cụm đã khớp) của một đoạn."""
+def _tim(regex, text):
+    return {m.group(1) for m in regex.finditer(text)}
+
+
+def _diem_doan(text, bo_qua):
+    """Trả về (điểm tích cực, điểm tiêu cực, cụm đã khớp); bo_qua = tập nhóm tiêu cực được bỏ qua."""
     pos = neg = 0
     khop = []
     for m in RE_POS.finditer(text):
         pos += POS_WORDS[m.group(1)]
         khop.append("+" + m.group(1))
-    for m in RE_NEG_DAN_SINH.finditer(text):
-        neg += NEG_DAN_SINH[m.group(1)]
-        khop.append("-" + m.group(1))
-    if not ngu_canh_dau_tranh:
-        for m in RE_NEG_PHAP_LUAT.finditer(text):
-            neg += NEG_PHAP_LUAT[m.group(1)]
+    for ten, bang, rx in NHOM_TIEU_CUC:
+        if ten in bo_qua:
+            continue
+        for m in rx.finditer(text):
+            neg += bang[m.group(1)]
             khop.append("-" + m.group(1))
     return pos, neg, khop
 
@@ -238,9 +272,21 @@ def _diem_doan(text, ngu_canh_dau_tranh):
 def phan_tich_sac_thai(tieu_de, tom_tat=""):
     """Trả về dict: nhan (Tích cực/Trung lập/Tiêu cực), diem, ngu_canh, khop (để dò lỗi)."""
     td, tt = _chuan_hoa(tieu_de), _chuan_hoa(tom_tat)
-    ngu_canh = sorted({m.group(1) for m in RE_NGU_CANH.finditer(td + " " + tt)})
-    p1, n1, k1 = _diem_doan(td, bool(ngu_canh))
-    p2, n2, k2 = _diem_doan(tt, bool(ngu_canh))
+    nc_gia_dinh = _tim(RE_GIA_DINH, td + " | " + tt)
+    nc_ung_pho = _tim(RE_UNG_PHO, td)
+    nc_dau_tranh = _tim(RE_DAU_TRANH, td)
+
+    bo_qua = set()
+    if nc_gia_dinh:
+        bo_qua |= {"dan_sinh", "su_co", "phap_luat"}
+    if nc_ung_pho:
+        bo_qua.add("su_co")
+    if nc_dau_tranh:
+        bo_qua.add("phap_luat")
+
+    p1, n1, k1 = _diem_doan(td, bo_qua)
+    p2, n2, k2 = _diem_doan(tt, bo_qua)
+    ngu_canh = sorted(nc_gia_dinh | nc_ung_pho | nc_dau_tranh)
     diem = 2 * (p1 - n1) + (p2 - n2) + (DIEM_NGU_CANH if ngu_canh else 0)
     nhan = "Tiêu cực" if diem < 0 else "Tích cực" if diem > 0 else "Trung lập"
     return {"nhan": nhan, "diem": diem, "ngu_canh": ngu_canh,
