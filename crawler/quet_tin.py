@@ -44,7 +44,7 @@ import trafilatura
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
-PHIEN_BAN = "2026-10-23b"   # in ra log GitHub Actions để biết đang chạy bản nào
+PHIEN_BAN = "2026-10-23c"   # in ra log GitHub Actions để biết đang chạy bản nào
 
 SO_NGAY_LUU = 30          # xóa tin cũ hơn số ngày này
 SO_NGAY_CHAM_LAI = 7      # chấm lại sắc thái cho tin trong bấy nhiêu ngày gần nhất
@@ -538,17 +538,27 @@ def sb_cham_lai_sac_thai():
         (vd tin "Công an xã Tuyên Quang" của Lâm Đồng đã lọt vào trước khi sửa bộ lọc).
     """
     moc = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=SO_NGAY_CHAM_LAI)).isoformat()
+    # Supabase chỉ trả tối đa 1000 dòng mỗi lần -> lấy theo từng trang, tin mới nhất trước
+    rows, trang = [], 1000
     try:
-        r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/dt_bai",
-            params={"select": "khoa,tieu_de,tom_tat,cam_xuc,muc,nguon,link_goc,ngoai_tinh", "thoi_gian": f"gte.{moc}", "limit": "3000"},
-            headers=sb_headers(), timeout=60)
-        r.raise_for_status()
+        while True:
+            r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/dt_bai",
+                params={"select": "khoa,tieu_de,tom_tat,cam_xuc,muc,nguon,link_goc,ngoai_tinh",
+                        "thoi_gian": f"gte.{moc}", "order": "thoi_gian.desc,khoa.asc",
+                        "limit": str(trang), "offset": str(len(rows))},
+                headers=sb_headers(), timeout=60)
+            r.raise_for_status()
+            phan = r.json()
+            rows.extend(phan)
+            if len(phan) < trang or len(rows) >= 20000:
+                break
     except Exception as ex:
         print("  ! Không lấy được tin để chấm lại:", ex)
-        return
+        if not rows:
+            return
     doi = an = 0
-    for row in r.json():
+    for row in rows:
         cap_nhat = {}
         moi = analyze_sentiment(row.get("tieu_de") or "", row.get("tom_tat") or "")
         if moi != row.get("cam_xuc"):
@@ -561,7 +571,7 @@ def sb_cham_lai_sac_thai():
             an += 1
         if cap_nhat:
             sb_cap_nhat(row["khoa"], cap_nhat)
-    print(f"Rà lại: đổi nhãn sắc thái {doi} tin, ẩn {an} tin ngoài tỉnh.")
+    print(f"Rà lại {len(rows)} tin trong {SO_NGAY_CHAM_LAI} ngày: đổi nhãn sắc thái {doi} tin, ẩn {an} tin ngoài tỉnh.")
 
 
 def sb_xoa_tin_cu():
