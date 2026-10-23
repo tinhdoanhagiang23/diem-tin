@@ -44,6 +44,8 @@ import trafilatura
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
+PHIEN_BAN = "2026-10-23b"   # in ra log GitHub Actions để biết đang chạy bản nào
+
 SO_NGAY_LUU = 30          # xóa tin cũ hơn số ngày này
 SO_NGAY_CHAM_LAI = 7      # chấm lại sắc thái cho tin trong bấy nhiêu ngày gần nhất
 MAX_TRICH_XUAT = 150      # số bài tối đa bóc nội dung mỗi lần chạy
@@ -767,6 +769,15 @@ def main():
         sys.exit("Thiếu SUPABASE_URL hoặc SUPABASE_SERVICE_KEY")
 
     t0 = time.time()
+    print(f"== quet_tin.py phiên bản {PHIEN_BAN}")
+
+    # Rà lại tin cũ TRƯỚC khi quét (bước này nhanh), để dù bước quét/bóc bài có lỗi
+    # hay hết giờ thì nhãn sắc thái và bộ lọc địa bàn mới vẫn được áp dụng.
+    try:
+        sb_cham_lai_sac_thai()
+    except Exception as ex:
+        print("  ! Lỗi rà lại tin cũ:", ex)
+
     bai = quet_tat_ca()
     print(f"\nTổng cộng {len(bai)} tin khác nhau.")
 
@@ -816,8 +827,10 @@ def main():
                     print("  ! Lỗi xử lý:", ex)
         print(f"   -> bóc được {dem['ok']}, lỗi {dem['loi']}")
 
-    sb_cham_lai_sac_thai()
-    sb_xoa_tin_cu()
+    try:
+        sb_xoa_tin_cu()
+    except Exception as ex:
+        print("  ! Lỗi xóa tin cũ:", ex)
     print(f"\nXong sau {time.time() - t0:.0f} giây.")
 
 
